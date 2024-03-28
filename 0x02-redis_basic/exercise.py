@@ -70,36 +70,43 @@ class Cache:
             Returns:
                 The result of the original method call.
             """
-            inputs_key = f"{method.__qualname__}:inputs"
-            outputs_key = f"{method.__qualname__}:outputs"
+            self._redis.rpush(method.__qualname__ + ":all_inputs", str(args))
+        result = method(self, *args, **kwargs)
+        self._redis.rpush(method.__qualname__ + ":outputs", str(result))
+        return result
+    return wrapper
 
-            # Store input arguments
-            self._redis.rpush(inputs_key, str(args))
-
-            # Execute the wrapped function
-            result = method(self, *args, **kwargs)
-
-            # Store output result
-            self._redis.rpush(outputs_key, result)
-
-            return result
-
-        return wrapper
-
-    def replay(func: Callable):
+    def replay(fn: Callable):
         """Display the history of calls of a particular function."""
-    # Construct keys for inputs and outputs
-    inputs_key = f"{func.__qualname__}:inputs"
-    outputs_key = f"{func.__qualname__}:outputs"
+        r = redis.Redis()
+    function_name = fn.__qualname__
+    value = r.get(function_name)
+    try:
+        value = int(value.decode("utf-8"))
+    except Exception:
+        value = 0
 
-    # Retrieve inputs and outputs from Redis
-    inputs = cache._redis.lrange(inputs_key, 0, -1)
-    outputs = cache._redis.lrange(outputs_key, 0, -1)
+    # print(f"{function_name} was called {value} times")
+    print("{} was called {} times:".format(function_name, value))
+    # inputs = r.lrange(f"{function_name}:inputs", 0, -1)
+    inputs = r.lrange("{}:inputs".format(function_name), 0, -1)
 
-    # Print function call history
-    print(f"{func.__qualname__} was called {len(inputs)} times:")
-    for inp, out in zip(inputs, outputs):
-        print(f"{func.__qualname__}(*{inp.decode()}) -> {out.decode()}")
+    # outputs = r.lrange(f"{function_name}:outputs", 0, -1)
+    outputs = r.lrange("{}:outputs".format(function_name), 0, -1)
+
+    for input, output in zip(inputs, outputs):
+        try:
+            input = input.decode("utf-8")
+        except Exception:
+            input = ""
+
+        try:
+            output = output.decode("utf-8")
+        except Exception:
+            output = ""
+
+        # print(f"{function_name}(*{input}) -> {output}")
+        print("{}(*{}) -> {}".format(function_name, input, output))
 
     @call_history
     @count_calls
@@ -117,46 +124,31 @@ class Cache:
         self._redis.set(key, data)
         return key
 
-    def get(self, key: str, fn: Optional[Callable] = None) -> bytes:
+    def get(self, key: str,
+            fn: Optional[callable] = None) -> Union[str, bytes,
+                                                    int, float]:
         """
-        Retrieve data from the Redis cache using the provided key.
-
-        Args:
-            key: The key under which the data is stored in the cache.
-            fn: An optional callable to convert the retrieved data back to the
-            desired format.
-
-        Returns:
-            The retrieved data as bytes, or None if the key does not
-            exist in the cache.
+        method that take a key string argument and an
+        optional Callable argument named fn. This callable will be used
+        to convert the data back to the desired format
         """
-        data = self._redis.get(key)
-        if fn is not None and data is not None:
-            return fn(data)
-        return data
+        if not self._redis.exists(key):
+            return None
+        if fn is None:
+            return self._redis.get(key)
+        else:
+            return fn(self._redis.get(key))
 
-    def get_str(self, key: str) -> Optional[str]:
+    def get_str(self, key: str) -> str:
         """
-        Retrieve a string value from the Redis cache using the provided key.
-
-        Args:
-            key: The key under which the string value is stored in the cache.
-
-        Returns:
-            The retrieved string value, or None if the key does not exist in
-            the cache.
+        Method that converts the data back into a string
         """
-        return self.get(key, fn=lambda d: d.decode('utf-8'))
+        if not self._redis.exists(key):
+            return None
+        return str(self._redis.get(key))
 
-    def get_int(self, key: str) -> Optional[int]:
-        """
-        Retrieve an integer value from the Redis cache using the provided key.
-
-        Args:
-            key: The key under which the integer value is stored in the cache.
-
-        Returns:
-            The retrieved integer value, or None if the key does not exist
-            in the cache.
-        """
-        return self.get(key, fn=int)
+    def get_int(self, key):
+        """Method used to convert data back into an int"""
+        if not self._redis.exists(key):
+            return None
+        return int.from_bytes(self._redis.get(key), "big")
